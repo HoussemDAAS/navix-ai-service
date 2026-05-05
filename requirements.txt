@@ -1,7 +1,7 @@
 fastapi==0.115.0
 uvicorn==0.30.0
 langgraph==0.2.61
-langchain-anthropic==0.3.12
+langchain-openai==0.3.12
 langchain-core==0.3.51
 pydantic==2.9.0
 python-dotenv==1.0.1

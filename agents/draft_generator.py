@@ -2,7 +2,7 @@ import json
 import logging
 from typing import TypedDict
 
-from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 
@@ -10,7 +10,7 @@ from schemas.drafts import DraftsRequest, DraftsResponse, Draft
 
 logger = logging.getLogger(__name__)
 
-llm = ChatAnthropic(model="claude-sonnet-4-20250514", temperature=0.8, max_tokens=8192)
+llm = ChatOpenAI(model="gpt-4o", temperature=0.8, max_tokens=8192)
 
 
 class DraftState(TypedDict):

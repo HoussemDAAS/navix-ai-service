@@ -1,7 +1,7 @@
 import logging
 from typing import TypedDict
 
-from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 
@@ -9,7 +9,7 @@ from schemas.analysis import AnalysisRequest, AnalysisResponse, FormatInsight, H
 
 logger = logging.getLogger(__name__)
 
-llm = ChatAnthropic(model="claude-sonnet-4-20250514", temperature=0.3, max_tokens=4096)
+llm = ChatOpenAI(model="gpt-4o", temperature=0.3, max_tokens=4096)
 
 
 class AnalysisState(TypedDict):
