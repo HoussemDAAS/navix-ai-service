@@ -7,6 +7,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 
 from schemas.drafts import DraftsRequest, DraftsResponse, Draft
+from rag import retrieve_brand_voice
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +16,18 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0.8, max_tokens=8192)
 
 class DraftState(TypedDict):
     request: DraftsRequest
+    brand_voice_context: str
     raw_drafts: str
     final_result: DraftsResponse | None
+
+
+async def fetch_brand_voice(state: DraftState) -> DraftState:
+    """Retrieve user's own captions/drafts so generated content sounds like them."""
+    request = state["request"]
+    direction_titles = " | ".join(d.title_pillar for d in request.directions[:5])
+    query = f"writing style and tone for posts about {direction_titles}"
+    state["brand_voice_context"] = await retrieve_brand_voice(request.project_id, query, n=10)
+    return state
 
 
 SYSTEM_PROMPT = """You are an expert social media copywriter. You write engaging, scroll-stopping content that matches a brand's voice perfectly.
@@ -61,6 +72,10 @@ async def generate_drafts(state: DraftState) -> DraftState:
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=f"""{brand_rules}
 
+{state['brand_voice_context']}
+
+Use the user's own posts above as the PRIMARY voice reference. Mirror their sentence rhythm, vocabulary choices, emoji usage, and CTA patterns. The generated content must sound like the same person wrote it.
+
 CONTENT DIRECTIONS TO DRAFT:
 {directions_text}
 
@@ -104,10 +119,12 @@ async def parse_drafts(state: DraftState) -> DraftState:
 def build_draft_graph():
     graph = StateGraph(DraftState)
 
+    graph.add_node("fetch_brand_voice", fetch_brand_voice)
     graph.add_node("generate_drafts", generate_drafts)
     graph.add_node("parse_drafts", parse_drafts)
 
-    graph.set_entry_point("generate_drafts")
+    graph.set_entry_point("fetch_brand_voice")
+    graph.add_edge("fetch_brand_voice", "generate_drafts")
     graph.add_edge("generate_drafts", "parse_drafts")
     graph.add_edge("parse_drafts", END)
 
@@ -123,6 +140,7 @@ async def run_draft_generation(request: DraftsRequest) -> DraftsResponse:
 
     initial_state: DraftState = {
         "request": request,
+        "brand_voice_context": "",
         "raw_drafts": "",
         "final_result": None,
     }

@@ -6,6 +6,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 
 from schemas.analysis import AnalysisRequest, AnalysisResponse, FormatInsight, HookInsight, Opportunity
+from rag import retrieve_brand_voice, retrieve_market_context
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +15,25 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0.3, max_tokens=4096)
 
 class AnalysisState(TypedDict):
     request: AnalysisRequest
+    market_context: str
+    brand_voice_context: str
     formats_raw: str
     hooks_raw: str
     opportunities_raw: str
     final_result: AnalysisResponse | None
+
+
+async def gather_rag_context(state: AnalysisState) -> AnalysisState:
+    """Pull retrieved context once, reuse across all analysis steps."""
+    request = state["request"]
+    niche = request.brand_kit.target_audience or request.brand_kit.objective or "social media content"
+    state["market_context"] = await retrieve_market_context(
+        request.project_id, f"top performing posts in {niche}"
+    )
+    state["brand_voice_context"] = await retrieve_brand_voice(
+        request.project_id, f"brand voice for {niche}"
+    )
+    return state
 
 
 SYSTEM_PROMPT = """You are a social media market intelligence analyst. You analyze competitor content to identify patterns, winning strategies, and whitespace opportunities.
@@ -54,6 +70,8 @@ COMPETITORS:
 
 RECENT POSTS (signals):
 {signals_summary}
+
+{state['market_context']}
 
 Identify the top 3-5 content formats being used. For each format, note:
 1. The format name (e.g., "Short-form educational reels", "Carousel breakdowns", "Story polls")
@@ -117,7 +135,7 @@ Objective: {request.brand_kit.objective or 'not set'}"""
 
     response = await llm.ainvoke([
         SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=f"""Based on the competitor analysis, identify whitespace opportunities — content gaps and underserved areas.
+        HumanMessage(content=f"""Based on the competitor analysis AND the brand's own voice (retrieved from their existing posts), identify whitespace opportunities — content gaps and underserved areas this specific brand could own.
 
 FORMATS ANALYSIS:
 {state['formats_raw']}
@@ -127,6 +145,8 @@ HOOKS/CTA ANALYSIS:
 
 BRAND CONTEXT:
 {brand_context}
+
+{state['brand_voice_context']}
 
 Identify 3-5 whitespace opportunities where this brand could differentiate:
 - What topics/formats are competitors NOT covering?
@@ -189,12 +209,14 @@ Return ONLY the JSON object. Include 3-5 items in each array. key_takeaways shou
 def build_analysis_graph():
     graph = StateGraph(AnalysisState)
 
+    graph.add_node("gather_rag_context", gather_rag_context)
     graph.add_node("analyze_formats", analyze_formats)
     graph.add_node("analyze_hooks_ctas", analyze_hooks_ctas)
     graph.add_node("identify_opportunities", identify_opportunities)
     graph.add_node("synthesize", synthesize)
 
-    graph.set_entry_point("analyze_formats")
+    graph.set_entry_point("gather_rag_context")
+    graph.add_edge("gather_rag_context", "analyze_formats")
     graph.add_edge("analyze_formats", "analyze_hooks_ctas")
     graph.add_edge("analyze_hooks_ctas", "identify_opportunities")
     graph.add_edge("identify_opportunities", "synthesize")
@@ -212,6 +234,8 @@ async def run_market_analysis(request: AnalysisRequest) -> AnalysisResponse:
 
     initial_state: AnalysisState = {
         "request": request,
+        "market_context": "",
+        "brand_voice_context": "",
         "formats_raw": "",
         "hooks_raw": "",
         "opportunities_raw": "",

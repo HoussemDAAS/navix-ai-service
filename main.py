@@ -2,12 +2,15 @@ import logging
 import os
 
 from dotenv import load_dotenv
+
+# IMPORTANT: load .env BEFORE importing routers/agents — they instantiate
+# ChatOpenAI at module level and need OPENAI_API_KEY present.
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routers import analysis, directions, drafts, brand_memory
-
-load_dotenv()
 
 log_level = os.getenv("LOG_LEVEL", "info").upper()
 logging.basicConfig(level=getattr(logging, log_level), format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")

@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 
 from schemas.directions import DirectionsRequest, DirectionsResponse, ContentDirection
 from schemas.analysis import AnalysisResponse
+from rag import retrieve_brand_voice
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +17,20 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0.7, max_tokens=4096)
 
 class DirectionState(TypedDict):
     request: DirectionsRequest
+    brand_voice_context: str
     raw_directions: str
     final_result: DirectionsResponse | None
+
+
+async def fetch_brand_voice(state: DirectionState) -> DirectionState:
+    """Retrieve user's own posts to ground directions in their actual voice."""
+    request = state["request"]
+    query = (
+        f"content style and voice for {request.brand_kit.target_audience or 'audience'} "
+        f"focused on {request.brand_kit.objective or 'engagement'}"
+    )
+    state["brand_voice_context"] = await retrieve_brand_voice(request.project_id, query, n=8)
+    return state
 
 
 SYSTEM_PROMPT = """You are a creative content strategist for social media. You generate strategic content directions (pillars) based on market analysis and brand identity.
@@ -69,6 +82,8 @@ Key Takeaways:
 
 {brand_context}
 
+{state['brand_voice_context']}
+
 Generate exactly {request.num_directions} content directions. Each direction should:
 1. Have a clear title/pillar name
 2. Specify a unique angle (perspective or approach)
@@ -112,10 +127,12 @@ async def parse_directions(state: DirectionState) -> DirectionState:
 def build_direction_graph():
     graph = StateGraph(DirectionState)
 
+    graph.add_node("fetch_brand_voice", fetch_brand_voice)
     graph.add_node("generate_directions", generate_directions)
     graph.add_node("parse_directions", parse_directions)
 
-    graph.set_entry_point("generate_directions")
+    graph.set_entry_point("fetch_brand_voice")
+    graph.add_edge("fetch_brand_voice", "generate_directions")
     graph.add_edge("generate_directions", "parse_directions")
     graph.add_edge("parse_directions", END)
 
@@ -131,6 +148,7 @@ async def run_direction_generation(request: DirectionsRequest) -> DirectionsResp
 
     initial_state: DirectionState = {
         "request": request,
+        "brand_voice_context": "",
         "raw_directions": "",
         "final_result": None,
     }
