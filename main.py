@@ -10,7 +10,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import analysis, directions, drafts, brand_memory, brand_kit
+from routers import analysis, directions, drafts, brand_memory, brand_kit, studio
 
 log_level = os.getenv("LOG_LEVEL", "info").upper()
 logging.basicConfig(level=getattr(logging, log_level), format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -36,6 +36,7 @@ app.include_router(directions.router)
 app.include_router(drafts.router)
 app.include_router(brand_memory.router)
 app.include_router(brand_kit.router)
+app.include_router(studio.router)
 
 
 @app.get("/health")
