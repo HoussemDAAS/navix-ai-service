@@ -15,4 +15,6 @@ class StudioChatRequest(BaseModel):
     creator_memory: str | None = None
     # Language the CONTENT is written in; the assistant itself talks in English
     content_language: str = "same as my posts"
+    # References shared in this session: {id, kind, title, summary}
+    references: list[dict] = Field(default_factory=list)
     messages: list[StudioMessage] = Field(default_factory=list)

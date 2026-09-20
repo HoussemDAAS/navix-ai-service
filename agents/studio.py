@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator
 from openai import AsyncOpenAI
 
 from prompt_context import grounding
-from rag import retrieve_context
+from rag import get_supabase, retrieve_context
 from schemas.studio import StudioChatRequest
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,18 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_reference",
+            "description": "Read the full text of a reference the user shared in this session (transcript, PDF text, image description). Use it before modelling content on that reference.",
+            "parameters": {
+                "type": "object",
+                "properties": {"reference_id": {"type": "string"}},
+                "required": ["reference_id"],
             },
         },
     },
@@ -192,6 +204,30 @@ async def _run_tool(project_id: str, name: str, args: dict[str, Any]) -> tuple[l
         chunks = await retrieve_context(project_id, query, source_types=["competitor_post"], match_count=8, threshold=0.3)
         return [{"type": "tool", "name": name, "query": query, "hits": len(chunks)}], _format_hits(chunks)
 
+    if name == "read_reference":
+        reference_id = str(args.get("reference_id") or "")
+        try:
+            result = (
+                get_supabase()
+                .table("references")
+                .select("title, kind, summary, extracted_text")
+                .eq("id", reference_id)
+                .eq("project_id", project_id)
+                .maybe_single()
+                .execute()
+            )
+            row = result.data if result is not None else None
+        except Exception as exc:
+            logger.warning(f"read_reference failed: {exc}")
+            row = None
+        if not row:
+            return [{"type": "tool", "name": name, "query": reference_id, "hits": 0}], "Reference not found."
+        body = (row.get("extracted_text") or row.get("summary") or "")[:6000]
+        return (
+            [{"type": "tool", "name": name, "query": str(row.get("title") or reference_id), "hits": 1}],
+            f"REFERENCE \"{row.get('title')}\" ({row.get('kind')}):\n{body}",
+        )
+
     if name == "propose_ideas":
         ideas = [i for i in (args.get("ideas") or []) if isinstance(i, dict)][:5]
         titles = ", ".join(str(i.get("title_pillar")) for i in ideas)
@@ -226,6 +262,15 @@ async def stream_studio_turn(request: StudioChatRequest) -> AsyncIterator[str]:
         system += (
             f"\n\nPROJECT: {p.get('name') or 'unknown'} · niche: {p.get('niche') or 'unknown'}"
             f" · handle: @{p.get('handle') or '?'} · location: {p.get('location') or 'unknown'}"
+        )
+    if request.references:
+        listed = "\n".join(
+            f"- [{r.get('id')}] {r.get('kind')} · {r.get('title')} — {(r.get('summary') or 'no summary')[:300]}"
+            for r in request.references
+        )
+        system += (
+            "\n\nREFERENCES the user shared in this session (call read_reference with the id for the full text "
+            "before modelling anything on one of them):\n" + listed
         )
 
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
