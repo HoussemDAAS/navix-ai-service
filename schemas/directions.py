@@ -17,6 +17,8 @@ class DirectionsRequest(BaseModel):
     analysis: AnalysisResponse
     brand_kit: BrandKitData
     num_directions: int = 6
+    persona: str | None = None
+    account_model: dict | None = None
 
 
 class DirectionsResponse(BaseModel):

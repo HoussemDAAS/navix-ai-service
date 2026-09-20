@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 
 from schemas.drafts import DraftsRequest, DraftsResponse, Draft
 from rag import retrieve_brand_voice
+from prompt_context import grounding
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ async def generate_drafts(state: DraftState) -> DraftState:
     )
 
     response = await llm.ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT),
+        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model)),
         HumanMessage(content=f"""{brand_rules}
 
 {state['brand_voice_context']}

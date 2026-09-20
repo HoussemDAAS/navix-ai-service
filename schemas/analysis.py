@@ -26,6 +26,10 @@ class AnalysisRequest(BaseModel):
     competitors: list[CompetitorData]
     brand_kit: BrandKitData
     signals: list[SignalData]
+    # Account type chosen at signup: creator | ecommerce | agency
+    persona: str | None = None
+    # Field analytics computed by the backend from scraped posts (self vs field)
+    account_model: dict | None = None
 
 
 class AnalysisResponse(BaseModel):

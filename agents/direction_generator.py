@@ -9,6 +9,7 @@ from langgraph.graph import StateGraph, END
 from schemas.directions import DirectionsRequest, DirectionsResponse, ContentDirection
 from schemas.analysis import AnalysisResponse
 from rag import retrieve_brand_voice
+from prompt_context import grounding
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ Key Takeaways:
 - Preferred CTA style: {brand_kit.preferred_cta or 'Not specified'}"""
 
     response = await llm.ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT),
+        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model)),
         HumanMessage(content=f"""{analysis_summary}
 
 {brand_context}
