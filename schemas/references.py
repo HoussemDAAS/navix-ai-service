@@ -7,6 +7,9 @@ class ReferenceExtractRequest(BaseModel):
     url: str  # public URL of the uploaded file (or the link itself)
     mime_type: str | None = None
     title: str | None = None
+    # For links: the caption/metrics the backend already scraped, and the video to transcribe
+    text: str | None = None
+    video_url: str | None = None
 
 
 class ReferenceExtractResponse(BaseModel):

@@ -128,7 +128,24 @@ async def extract_reference(request: ReferenceExtractRequest) -> ReferenceExtrac
         if not text:
             raise ValueError("No speech was detected in this clip.")
     elif kind == "link":
-        raise ValueError("Links are not read yet — upload the file itself or paste its text.")
+        # The backend scraped caption + metrics; we add the transcript when there is a video
+        text = (request.text or "").strip()
+        if request.video_url:
+            try:
+                data = await _download(request.video_url)
+                if len(data) > WHISPER_MAX_BYTES:
+                    meta["transcript_skipped"] = "video larger than 25 MB"
+                else:
+                    extension = EXTENSION_BY_MIME.get((request.mime_type or "").lower(), ".mp4")
+                    transcript = await _transcribe(client, data, f"reference{extension}")
+                    if transcript:
+                        text = f"{text}\n\nTranscript:\n{transcript}"
+                        meta["transcribed_by"] = "whisper-1"
+            except Exception as exc:  # a missing transcript must not lose the caption
+                logger.warning(f"Transcript failed for {request.reference_id}: {exc}")
+                meta["transcript_skipped"] = str(exc)[:200]
+        if not text:
+            raise ValueError("Nothing readable was found in this post.")
     else:
         raise ValueError(f"Unsupported reference kind: {kind}")
 
