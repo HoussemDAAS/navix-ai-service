@@ -19,6 +19,7 @@ class DirectionsRequest(BaseModel):
     num_directions: int = 6
     persona: str | None = None
     account_model: dict | None = None
+    creator_memory: str | None = None
 
 
 class DirectionsResponse(BaseModel):

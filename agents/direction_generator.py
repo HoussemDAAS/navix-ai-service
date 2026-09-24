@@ -78,7 +78,7 @@ Key Takeaways:
 - Preferred CTA style: {brand_kit.preferred_cta or 'Not specified'}"""
 
     response = await llm.ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model)),
+        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model, request.creator_memory)),
         HumanMessage(content=f"""{analysis_summary}
 
 {brand_context}

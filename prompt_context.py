@@ -121,6 +121,14 @@ def account_model_block(model: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
-def grounding(persona: str | None, account_model: dict[str, Any] | None) -> str:
+def creator_memory_block(memory: str | None) -> str:
+    """What Navix has learned about this creator across sessions (already formatted by the backend)."""
+    if not memory or not memory.strip():
+        return ""
+    header = "CREATOR MEMORY (learned across sessions; the user can edit it — follow it unless they say otherwise):"
+    return f"\n\n{header}\n{memory.strip()}"
+
+
+def grounding(persona: str | None, account_model: dict[str, Any] | None, creator_memory: str | None = None) -> str:
     """Everything an agent should know about the account before it reasons."""
-    return persona_block(persona) + account_model_block(account_model)
+    return persona_block(persona) + account_model_block(account_model) + creator_memory_block(creator_memory)

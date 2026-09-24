@@ -63,7 +63,7 @@ async def analyze_formats(state: AnalysisState) -> AnalysisState:
     )
 
     response = await llm.ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model)),
+        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model, request.creator_memory)),
         HumanMessage(content=f"""Analyze the dominant content formats from these competitors and their posts.
 
 COMPETITORS:
@@ -105,7 +105,7 @@ async def analyze_hooks_ctas(state: AnalysisState) -> AnalysisState:
     )
 
     response = await llm.ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model)),
+        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model, request.creator_memory)),
         HumanMessage(content=f"""Analyze the hooks (opening lines) and CTAs (calls-to-action) from these top-performing posts.
 
 TOP PERFORMING POSTS (sorted by engagement):
@@ -135,7 +135,7 @@ Target audience: {request.brand_kit.target_audience or 'not set'}
 Objective: {request.brand_kit.objective or 'not set'}"""
 
     response = await llm.ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model)),
+        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model, request.creator_memory)),
         HumanMessage(content=f"""Based on the competitor analysis AND the brand's own voice (retrieved from their existing posts), identify whitespace opportunities — content gaps and underserved areas this specific brand could own.
 
 FORMATS ANALYSIS:

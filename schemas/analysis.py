@@ -30,6 +30,7 @@ class AnalysisRequest(BaseModel):
     persona: str | None = None
     # Field analytics computed by the backend from scraped posts (self vs field)
     account_model: dict | None = None
+    creator_memory: str | None = None
 
 
 class AnalysisResponse(BaseModel):

@@ -70,7 +70,7 @@ async def generate_drafts(state: DraftState) -> DraftState:
     )
 
     response = await llm.ainvoke([
-        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model)),
+        SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model, request.creator_memory)),
         HumanMessage(content=f"""{brand_rules}
 
 {state['brand_voice_context']}
