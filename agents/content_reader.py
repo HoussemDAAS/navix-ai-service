@@ -22,7 +22,11 @@ VISION_MODEL = os.getenv("CONTENT_VISION_MODEL", "gpt-4o")
 WHISPER_MAX_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_SECONDS = 20 * 60
 CONCURRENCY = int(os.getenv("CONTENT_UNDERSTAND_CONCURRENCY", "4"))
+# One post never holds a batch hostage: download + Whisper + vision must fit in this budget
+ITEM_TIMEOUT_SECONDS = 75
 MIN_SPEECH_CHARS = 20
+# Shared across requests, so overlapping batches cannot multiply the load on Whisper
+_GATE = asyncio.Semaphore(CONCURRENCY)
 VIDEO_TYPES = {"video", "reel", "reels", "short", "shorts", "tiktok", "clip"}
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -42,7 +46,7 @@ def _headers(platform: str) -> dict[str, str]:
 async def _download_capped(url: str, platform: str) -> bytes | None:
     """Download a media file, giving up as soon as it passes Whisper's size limit."""
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0, connect=15.0), follow_redirects=True, headers=_headers(platform)
+        timeout=httpx.Timeout(30.0, connect=10.0), follow_redirects=True, headers=_headers(platform)
     ) as client:
         async with client.stream("GET", url) as response:
             response.raise_for_status()
@@ -137,13 +141,14 @@ async def _understand_one(client: AsyncOpenAI, item: ContentItem) -> ContentUnde
 
 
 async def understand_content(request: ContentUnderstandRequest) -> ContentUnderstandResponse:
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=120.0, max_retries=1)
-    gate = asyncio.Semaphore(CONCURRENCY)
+    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=60.0, max_retries=1)
 
     async def guarded(item: ContentItem) -> ContentUnderstanding:
-        async with gate:
+        async with _GATE:
             try:
-                return await _understand_one(client, item)
+                return await asyncio.wait_for(_understand_one(client, item), timeout=ITEM_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                return ContentUnderstanding(id=item.id, error=f"timed out after {ITEM_TIMEOUT_SECONDS}s")
             except Exception as exc:  # one bad post must not sink the batch
                 return ContentUnderstanding(id=item.id, error=str(exc)[:200])
 
