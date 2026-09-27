@@ -99,8 +99,10 @@ async def analyze_hooks_ctas(state: AnalysisState) -> AnalysisState:
         reverse=True
     )[:30]
 
+    # A signal carries the caption and, when the post was read, "[Spoken] ..." (the video's
+    # transcript) and "[Visual] ..." (what the image shows). Hooks live in the speech.
     captions = "\n".join(
-        f"[{s.likes_count} likes] @{s.competitor_handle}: \"{(s.caption or '')[:200]}\""
+        f"[{s.likes_count} likes] @{s.competitor_handle}: \"{(s.caption or '')[:700]}\""
         for s in high_engagement_signals
     )
 
@@ -108,12 +110,14 @@ async def analyze_hooks_ctas(state: AnalysisState) -> AnalysisState:
         SystemMessage(content=SYSTEM_PROMPT + grounding(request.persona, request.account_model, request.creator_memory)),
         HumanMessage(content=f"""Analyze the hooks (opening lines) and CTAs (calls-to-action) from these top-performing posts.
 
+Each post shows its caption, then "[Spoken]" with what is actually said in the video (transcript) and "[Visual]" with what the image shows. For a video the hook is the FIRST SENTENCE SPOKEN, not the caption; quote it in its original language and add a short English gloss when it is not English. Use the caption only when nothing is spoken.
+
 TOP PERFORMING POSTS (sorted by engagement):
 {captions}
 
 Identify:
 1. The top 5 winning hook patterns (the opening lines/phrases that grab attention)
-   - Quote the hook text
+   - Quote the hook text: the first sentence spoken for videos, the first line of the caption otherwise, at most 20 words
    - Name the pattern (e.g., "Contrarian statement", "Question hook", "Number-led")
    - Rate effectiveness (High/Medium/Low based on engagement)
 
