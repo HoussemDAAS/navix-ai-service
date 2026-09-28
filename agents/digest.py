@@ -18,17 +18,26 @@ logger = logging.getLogger(__name__)
 DIGEST_MODEL = os.getenv("DIGEST_MODEL", "gpt-4o")
 FORMATS = {"reel", "carousel", "image", "story", "video", "live"}
 
-SYSTEM_PROMPT = """You write the weekly digest on the Home page of ONE creator or brand, from facts computed by Navix. You speak TO them ("you", "your"), never as them. Two things:
+SYSTEM_PROMPT = """You write the weekly digest on the Home page of ONE creator or brand, from facts computed by Navix. {addressing} Two things:
 
-1. headline: one sentence, at most 140 characters, plain English, second person, with the single most important thing that happened this week and one real number from the facts (followers moved, how your best post did against your usual, how active your field was). Honest and warm: if they did not post, say so plainly without scolding. No emoji, no hype.
+1. headline: one sentence, at most 140 characters, plain English, with the single most important thing that happened this week and one real number from the facts (followers moved, how the best post did against the usual, how active the field was). Honest and warm: if nothing was posted, say so plainly without scolding. No emoji, no hype.
 
-2. idea: the ONE piece of content worth making next, grounded in a fact: the subject of their best post (a follow-up, a second angle, the same format on a new topic), the angle of the breakout post in their field (adapted to their voice, never copied), or a gap the field left open this week. Fields:
+2. idea: the ONE piece of content worth making next, grounded in a fact: the subject of the best post (a follow-up, a second angle, the same format on a new topic), the angle of the breakout post in the field (adapted to the brand's voice, never copied), or a gap the field left open this week. Fields:
    - title: at most 8 words, no quotes, names the concrete subject (not "personal growth stories" but the actual topic from the caption).
-   - why: one sentence, second person, that cites the exact fact it comes from: the post's subject and its ×N against the usual, the handle, or the format.
+   - why: one sentence that cites the exact fact it comes from: the post's subject and its ×N against the usual, the handle, or the format.
    - format: one of reel, carousel, image, story, video, live, or null.
-   - studio_prompt: the exact message the user would send to Navix Studio to make it. First person as the user, at most 220 characters, in English, naming the concrete topic taken from the facts, the format and the angle. Example shape: "Make me a reel that follows up my Tunisia summer post: 3 things that surprised me, same warm tone."
+   - studio_prompt: the exact message to send to Navix Studio to make it. First person in the brand's own voice, at most 220 characters, in English, naming the concrete topic taken from the facts, the format and the angle. Example shape: "Make me a reel that follows up my Tunisia summer post: 3 things that surprised me, same warm tone."
 
-Rules: never invent numbers, posts or handles; only use what the facts contain. Respect the brand kit and the creator memory. Return ONLY JSON: {"headline": "...", "idea": {"title": "...", "why": "...", "format": "...", "studio_prompt": "..."}}"""
+Rules: never invent numbers, posts or handles; only use what the facts contain. Respect the brand kit and the creator memory. Return ONLY JSON: {{"headline": "...", "idea": {{"title": "...", "why": "...", "format": "...", "studio_prompt": "..."}}}}"""
+
+# The brand reads its own digest as "you"; an agency reads its client's digest, so the
+# brand is named in the third person ("Nexgen did not post this week").
+ADDRESSING_OWNER = 'You speak TO them ("you", "your"), never as them; headline and why are in the second person.'
+ADDRESSING_AGENCY = (
+    "The reader is the AGENCY that manages this brand, not the brand. Name the brand by its name "
+    '(or "the brand") and use the third person ("they", "their") in headline and why; never "you" or "your". '
+    "Only studio_prompt is written in the brand's own first-person voice."
+)
 
 
 def _trim(value: Any, limit: int) -> str:
@@ -45,20 +54,31 @@ def _format_brand_kit(kit: dict | None) -> str:
 async def write_weekly_digest(request: WeeklyDigestRequest) -> WeeklyDigestResponse:
     client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=45.0, max_retries=1)
     p = request.project
+    agency = request.audience == "agency"
+    addressing = ADDRESSING_AGENCY if agency else ADDRESSING_OWNER
     # The persona guidance is skipped on purpose: it tells content agents to write AS the creator,
-    # while the digest talks TO them.
+    # while the digest talks ABOUT the week.
     prompt = (
-        f"PROJECT: {p.name or 'unknown'} · account type: {request.persona or 'unknown'}"
+        f"PROJECT: {p.name or 'unknown'} · type: {request.persona or 'unknown'}"
         f" · niche: {p.niche or 'unknown'} · handle: @{p.handle or '?'}"
-        f" · content language: {p.language or 'same as their posts'}\n"
+        f" · content language: {p.language or 'same as their posts'}"
+        f" · reader: {'the agency managing this brand' if agency else 'the brand itself'}\n"
         f"BRAND KIT: {_format_brand_kit(request.brand_kit)}"
         f"{account_model_block(request.account_model)}{creator_memory_block(request.creator_memory)}\n\n"
         f"THIS WEEK'S FACTS (JSON):\n{json.dumps(request.facts, ensure_ascii=False, default=str)}\n\n"
-        "Reminder: headline and why address the creator as 'you'; only studio_prompt is in the first person."
+        + (
+            f"Reminder: headline and why name the brand ({p.name or 'the brand'}) in the third person; "
+            "only studio_prompt is in the brand's first-person voice."
+            if agency
+            else "Reminder: headline and why address the creator as 'you'; only studio_prompt is in the first person."
+        )
     )
     completion = await client.chat.completions.create(
         model=DIGEST_MODEL,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT.format(addressing=addressing)},
+            {"role": "user", "content": prompt},
+        ],
         response_format={"type": "json_object"},
         temperature=0.5,
     )

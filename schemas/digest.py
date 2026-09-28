@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -11,6 +13,8 @@ class DigestProject(BaseModel):
 class WeeklyDigestRequest(BaseModel):
     project_id: str
     persona: str | None = None
+    # Who reads it: the brand or creator themselves, or the agency that manages them
+    audience: Literal["owner", "agency"] | None = None
     account_model: dict | None = None
     creator_memory: str | None = None
     brand_kit: dict | None = None
