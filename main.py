@@ -22,9 +22,12 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Allowed browser origins: CORS_ORIGINS="https://app.example.com,https://api.example.com"
+# in production, the local dev hosts when the variable is not set.
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001", "http://localhost:3000"],
+    allow_origins=_cors_origins or ["http://localhost:3001", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
