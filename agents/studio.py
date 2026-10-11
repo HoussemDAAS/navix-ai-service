@@ -7,6 +7,7 @@ as structured cards (tool calls) instead of prose. Events are yielded as
 Server-Sent Events so the backend can persist cards as they arrive.
 """
 import json
+import re
 import logging
 import os
 from typing import Any, AsyncIterator
@@ -14,7 +15,7 @@ from typing import Any, AsyncIterator
 from openai import AsyncOpenAI
 
 from prompt_context import grounding
-from rag import get_supabase, retrieve_context
+from rag import build_library_block, get_supabase, retrieve_context
 from schemas.studio import StudioChatRequest
 
 logger = logging.getLogger(__name__)
@@ -159,7 +160,7 @@ TOOLS: list[dict[str, Any]] = [
                     "caption_text": {"type": "string", "description": "the caption, ready to post"},
                     "video_script": {
                         "type": "string",
-                        "description": "for video formats: shot-by-shot script as numbered lines with spoken text and visual notes; omit otherwise",
+                        "description": "for video formats: the SPOKEN words, one line per shot separated by newlines, written in the content language, with the camera note in [brackets] at the end of the line; omit for non-video formats",
                     },
                     "hook_alternatives": {"type": "array", "items": {"type": "string"}},
                     "cta_alternatives": {"type": "array", "items": {"type": "string"}},
@@ -199,13 +200,18 @@ How you work:
 - Never invent metrics, quotes or posts. If a search found nothing useful, say so.
 - Tips on a draft must be specific to THIS account: why this format here, when to post (from the field data), what it was modelled on, one thing to watch out for.
 - A revision keeps what the user liked and changes only what they asked; pass revises_draft_id.
+- A video script is what the person SAYS, line by line, in the content language; the camera note goes in [brackets] at the end of the line. Never deliver a script made of English stage directions only.
+- Tunisian Derja is the Derja a Tunisian actually says (برشا، توا، باهي، كيفاش، شنوة، هاو، علاش، ما...ش, زادة، فيسع). Never Egyptian, Levantine, Gulf or standard-Arabic words. The French words Tunisians say stay in Latin letters inside the Arabic text (commande, lien, livraison, promo, lavage, importé, COD).
+- For a sales script (a product, an offer, e-commerce): before writing, settle the research header in your head: the other solutions the buyer already uses and their cons, the awareness stage, the product's unique mechanism in one line. Then build the script on a framework from the library (hook, pain, mechanism, product and proof, objection kill, CTA), make the proof something the camera can show, and fill 3 hooks from the hook templates with the brief's own words.
 {grounding}
 
 BRAND KIT:
 {brand_kit}
 
 CREATOR MEMORY (what Navix has learned about this creator so far):
-{creator_memory}"""
+{creator_memory}
+
+{library}"""
 
 
 def _format_brand_kit(kit: dict[str, Any] | None) -> str:
@@ -309,6 +315,14 @@ async def _run_tool(project_id: str, name: str, args: dict[str, Any]) -> tuple[l
         draft = dict(args)
         draft["hook_alternatives"] = [str(h) for h in (draft.get("hook_alternatives") or [])][:5]
         draft["cta_alternatives"] = [str(c) for c in (draft.get("cta_alternatives") or [])][:5]
+        # A script arrives as a list, or as numbered shots glued by commas: one shot per line
+        script = draft.get("video_script")
+        if isinstance(script, list):
+            script = "\n".join(str(s) for s in script)
+        if isinstance(script, str) and "\n" not in script.strip():
+            script = re.sub(r",\s*(?=\d{1,2}\.\s)", "\n", script)
+            script = re.sub(r",\s*(?=\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2})", "\n", script)
+        draft["video_script"] = script
         return (
             [{"type": "draft", "draft": draft}],
             "Draft shown to the user as a card. In one or two sentences say what you did and offer one concrete next step (a revision angle, a second format, or approval).",
@@ -395,11 +409,22 @@ async def _route(client: AsyncOpenAI, history: list[dict[str, Any]]) -> str:
 
 async def stream_studio_turn(request: StudioChatRequest) -> AsyncIterator[str]:
     """Yield SSE lines for one assistant turn."""
+    # The shared library: rules always, plus the frameworks, hooks, CTAs and examples
+    # closest to what the user just asked, in the language they write in.
+    last_user = next((m.content for m in reversed(request.messages) if m.role == "user" and m.content), "")
+    niche = (request.project or {}).get("niche") if request.project else None
+    kit = request.brand_kit or {}
+    library = await build_library_block(
+        f"{last_user}\n{kit.get('objective') or ''} {niche or ''}".strip(),
+        content_language=request.content_language,
+        niche=niche,
+    )
     system = SYSTEM_PROMPT.format(
         content_language=request.content_language or "same as my posts",
         grounding=grounding(request.persona, request.account_model),
         brand_kit=_format_brand_kit(request.brand_kit),
         creator_memory=request.creator_memory or "Nothing yet — this is one of the first sessions.",
+        library=library,
     )
     if request.project:
         p = request.project

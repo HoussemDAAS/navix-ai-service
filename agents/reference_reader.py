@@ -3,10 +3,13 @@ Turn a reference the user shared (photo, PDF, text, video) into text the Studio
 agent can read: image description by a vision model, PDF text, a Whisper
 transcript for video/audio — plus a short brief on what is worth reusing.
 """
+import asyncio
+import base64
 import io
 import logging
 import os
 
+import fitz  # PyMuPDF: renders PDF pages to images for OCR
 import httpx
 from openai import AsyncOpenAI
 from pypdf import PdfReader
@@ -72,11 +75,69 @@ async def _transcribe(client: AsyncOpenAI, data: bytes, filename: str) -> str:
     return (response.text or "").strip()
 
 
-def _pdf_text(data: bytes) -> tuple[str, int]:
+def _pdf_text(data: bytes, max_pages: int = MAX_PDF_PAGES) -> tuple[str, int]:
     reader = PdfReader(io.BytesIO(data))
-    pages = reader.pages[:MAX_PDF_PAGES]
+    pages = reader.pages[:max_pages]
     parts = [(page.extract_text() or "").strip() for page in pages]
     return "\n\n".join(p for p in parts if p), len(reader.pages)
+
+
+# ── OCR for PDFs made of images (Canva exports, scans): every page is rendered and
+# read by the vision model, which keeps Arabic, Latin and digits as written. ──
+OCR_MODEL = os.getenv("OCR_MODEL", VISION_MODEL)
+OCR_CONCURRENCY = 4
+OCR_MAX_PAGES_REFERENCE = 20  # a Studio reference; a library import reads the whole file
+OCR_MIN_CHARS_PER_PAGE = 60  # below this the "text" is page numbers, not content
+OCR_PROMPT = (
+    "Transcribe every piece of text on this page exactly as written, in its original language and script "
+    "(Arabic letters, Latin letters, digits, emojis). Keep the reading order and the line breaks, one line "
+    "of output per line of text. Do not translate, do not summarize, do not describe images, do not add "
+    "anything. If the page has no text at all, answer exactly: [EMPTY]"
+)
+
+
+def _render_pages(data: bytes, max_pages: int) -> list[bytes]:
+    doc = fitz.open(stream=data, filetype="pdf")
+    images: list[bytes] = []
+    for index, page in enumerate(doc):
+        if index >= max_pages:
+            break
+        pix = page.get_pixmap(matrix=fitz.Matrix(1.6, 1.6), alpha=False)
+        images.append(pix.tobytes("png"))
+    return images
+
+
+async def _ocr_page(client: AsyncOpenAI, png: bytes, index: int, sem: asyncio.Semaphore) -> tuple[int, str]:
+    async with sem:
+        data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        try:
+            response = await client.chat.completions.create(
+                model=OCR_MODEL,
+                max_tokens=4000,
+                temperature=0,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": OCR_PROMPT},
+                            {"type": "image_url", "image_url": {"url": data_url, "detail": "high"}},
+                        ],
+                    }
+                ],
+            )
+            text = (response.choices[0].message.content or "").strip()
+        except Exception as exc:
+            logger.warning(f"OCR failed on page {index + 1}: {exc}")
+            text = ""
+    return index, "" if text == "[EMPTY]" else text
+
+
+async def _ocr_pdf(client: AsyncOpenAI, data: bytes, max_pages: int) -> str:
+    images = _render_pages(data, max_pages)
+    sem = asyncio.Semaphore(OCR_CONCURRENCY)
+    results = await asyncio.gather(*(_ocr_page(client, png, i, sem) for i, png in enumerate(images)))
+    results.sort(key=lambda r: r[0])
+    return "\n\n".join(text for _, text in results if text)
 
 
 async def _summarize(client: AsyncOpenAI, kind: str, title: str | None, text: str) -> str:
@@ -111,10 +172,18 @@ async def extract_reference(request: ReferenceExtractRequest) -> ReferenceExtrac
         meta["described_by"] = VISION_MODEL
     elif kind == "pdf":
         data = await _download(request.url)
-        text, pages = _pdf_text(data)
+        page_cap = 1000 if request.full else MAX_PDF_PAGES
+        text, pages = _pdf_text(data, max_pages=page_cap)
         meta["pages"] = pages
-        if not text:
-            raise ValueError("This PDF has no selectable text (scanned pages) — paste the text instead.")
+        read_pages = max(1, min(pages, page_cap))
+        if len(text) < OCR_MIN_CHARS_PER_PAGE * read_pages:
+            # Images instead of text: read the pages with the vision model
+            ocr_cap = 1000 if request.full else OCR_MAX_PAGES_REFERENCE
+            logger.info(f"Reference {request.reference_id}: PDF has no text layer, OCR on {min(pages, ocr_cap)} page(s)")
+            text = await _ocr_pdf(client, data, ocr_cap)
+            meta["ocr"] = OCR_MODEL
+            if not text:
+                raise ValueError("No readable text was found in this PDF, even with OCR. Paste the text instead.")
     elif kind == "text":
         data = await _download(request.url)
         text = data.decode("utf-8", errors="ignore")
@@ -149,7 +218,8 @@ async def extract_reference(request: ReferenceExtractRequest) -> ReferenceExtrac
     else:
         raise ValueError(f"Unsupported reference kind: {kind}")
 
-    text = text[:MAX_TEXT_CHARS]
+    # A Studio reference is capped; a library import keeps the whole document
+    text = text[: (3_000_000 if request.full else MAX_TEXT_CHARS)]
     summary = await _summarize(client, kind, request.title, text)
     logger.info(f"Reference {request.reference_id} ({kind}) extracted: {len(text)} chars")
     return ReferenceExtractResponse(extracted_text=text, summary=summary, meta=meta)

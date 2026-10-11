@@ -7,7 +7,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 
 from schemas.drafts import DraftsRequest, DraftsResponse, Draft
-from rag import retrieve_brand_voice
+from rag import build_library_block, retrieve_brand_voice
 from prompt_context import grounding
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,8 @@ async def fetch_brand_voice(state: DraftState) -> DraftState:
     direction_titles = " | ".join(d.title_pillar for d in request.directions[:5])
     query = f"writing style and tone for posts about {direction_titles}"
     state["brand_voice_context"] = await retrieve_brand_voice(request.project_id, query, n=10)
+    angles = " | ".join(f"{d.title_pillar} {d.angle} {d.format}" for d in request.directions[:5])
+    state["library_context"] = await build_library_block(angles or direction_titles)
     return state
 
 
@@ -76,6 +78,10 @@ async def generate_drafts(state: DraftState) -> DraftState:
 {state['brand_voice_context']}
 
 Use the user's own posts above as the PRIMARY voice reference. Mirror their sentence rhythm, vocabulary choices, emoji usage, and CTA patterns. The generated content must sound like the same person wrote it.
+
+{state.get('library_context') or ''}
+
+Use the NAVIX LIBRARY as your craft: structure from the frameworks, openings from the hook templates, endings from the CTA patterns, register from the examples. Never copy an example.
 
 CONTENT DIRECTIONS TO DRAFT:
 {directions_text}

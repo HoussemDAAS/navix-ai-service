@@ -144,3 +144,135 @@ async def retrieve_feedback_history(project_id: str, n: int = 10) -> str:
         match_count=n,
     )
     return format_chunks(chunks, "RECENT USER FEEDBACK ON DRAFTS")
+
+
+# ───────────────────────── Navix knowledge library ─────────────────────────
+# Curated hooks, CTAs, frameworks, example scripts, dialect rules and distilled
+# articles, shared by every project (tables knowledge_items / knowledge_chunks).
+
+LIBRARY_HEADERS = {
+    "rule": "RULES (always follow them):",
+    "framework": "FRAMEWORKS (use as the structure of the script; fill every section for THIS product and audience):",
+    "hook": "HOOK TEMPLATES (fill the [BRACKETS] from the brief, adapt gender and number in Derja, offer 3 to 5 filled variants):",
+    "cta": "CTA PATTERNS (pick by goal and funnel stage, adapt the product words):",
+    "script": "EXAMPLE SCRIPTS (match the register, rhythm and language mix; never copy the content):",
+    "caption": "EXAMPLE CAPTIONS (match the register and language mix; never copy the content):",
+    "article": "PRINCIPLES from articles (apply where relevant):",
+}
+LONG_TYPES = {"framework", "script"}
+
+
+async def match_knowledge(
+    embedding: list[float],
+    *,
+    types: list[str] | None = None,
+    languages: list[str] | None = None,
+    scripts: list[str] | None = None,
+    formats: list[str] | None = None,
+    goals: list[str] | None = None,
+    field: str | None = None,
+    match_count: int = 6,
+    threshold: float = 0.2,
+) -> list[dict[str, Any]]:
+    """Nearest library items for an already computed query embedding."""
+    try:
+        sb = get_supabase()
+        result = sb.rpc(
+            "match_knowledge",
+            {
+                "query_embedding": embedding,
+                "match_count": match_count,
+                "match_threshold": threshold,
+                "filter_types": types,
+                "filter_languages": languages,
+                "filter_scripts": scripts,
+                "filter_formats": formats,
+                "filter_goals": goals,
+                "filter_field": field,
+            },
+        ).execute()
+        return result.data or []
+    except Exception as e:
+        logger.warning(f"Knowledge retrieval failed: {e}")
+        return []
+
+
+async def retrieve_knowledge(query: str, **kwargs: Any) -> list[dict[str, Any]]:
+    try:
+        embedding = await embed_text(query)
+    except Exception as e:
+        logger.error(f"Embedding generation failed for a library query: {e}")
+        return []
+    return await match_knowledge(embedding, **kwargs)
+
+
+def languages_for(content_language: str | None) -> list[str] | None:
+    """Map the user's content-language choice to library languages (None = all)."""
+    s = (content_language or "").lower()
+    if any(k in s for k in ("derja", "tunis", "arab", "darija")):
+        return ["derja", "mixed"]
+    if any(k in s for k in ("french", "fran")):
+        return ["fr", "mixed"]
+    if "english" in s:
+        return ["en", "mixed"]
+    return None
+
+
+def _render_item(row: dict[str, Any]) -> str:
+    cap = 1500 if row.get("type") in LONG_TYPES else 400
+    title = (row.get("title") or "").strip()
+    content = (row.get("content") or "").strip()[:cap]
+    note = (row.get("note") or "").strip()
+    head = f"{title}: " if title and not content.startswith(title) else ""
+    tail = f" (why: {note})" if note else ""
+    return f"{head}{content}{tail}"
+
+
+async def build_library_block(
+    query: str,
+    *,
+    content_language: str | None = None,
+    niche: str | None = None,
+    formats: list[str] | None = None,
+    goals: list[str] | None = None,
+) -> str:
+    """One prompt block with the rules and the closest examples for this request."""
+    if not query.strip():
+        return ""
+    try:
+        embedding = await embed_text(query[:2000])
+    except Exception as e:
+        logger.warning(f"Library embedding failed: {e}")
+        return ""
+    langs = languages_for(content_language)
+    field = (niche or "").strip().lower() or None
+    rules = await match_knowledge(embedding, types=["rule"], languages=langs, field=field, match_count=8, threshold=0.0)
+    frameworks = await match_knowledge(embedding, types=["framework"], field=field, formats=formats, goals=goals, match_count=2, threshold=0.12)
+    examples = await match_knowledge(embedding, types=["script", "caption"], languages=langs, field=field, formats=formats, goals=goals, match_count=4, threshold=0.12)
+    hooks = await match_knowledge(embedding, types=["hook"], languages=langs, field=field, goals=goals, match_count=6, threshold=0.12)
+    ctas = await match_knowledge(embedding, types=["cta"], languages=langs, field=field, goals=goals, match_count=5, threshold=0.12)
+    articles = await match_knowledge(embedding, types=["article"], field=field, match_count=3, threshold=0.2)
+
+    groups = [
+        ("rule", rules),
+        ("framework", frameworks),
+        ("hook", hooks),
+        ("cta", ctas),
+        ("script", [r for r in examples if r.get("type") == "script"]),
+        ("caption", [r for r in examples if r.get("type") == "caption"]),
+        ("article", articles),
+    ]
+    sections = []
+    for key, rows in groups:
+        if rows:
+            sections.append(LIBRARY_HEADERS[key] + "\n" + "\n".join(f"- {_render_item(r)}" for r in rows))
+    if not sections:
+        return ""
+    logger.info(
+        "Library block: %s",
+        ", ".join(f"{key}={len(rows)}" for key, rows in groups if rows),
+    )
+    return (
+        "NAVIX LIBRARY (curated craft shared by every project: use it, never quote it to the user, never copy an example):\n"
+        + "\n\n".join(sections)
+    )

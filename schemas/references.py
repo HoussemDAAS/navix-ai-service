@@ -10,6 +10,8 @@ class ReferenceExtractRequest(BaseModel):
     # For links: the caption/metrics the backend already scraped, and the video to transcribe
     text: str | None = None
     video_url: str | None = None
+    # Library imports keep the whole document; Studio references stay capped
+    full: bool = False
 
 
 class ReferenceExtractResponse(BaseModel):
