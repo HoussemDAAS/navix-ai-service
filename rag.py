@@ -276,3 +276,24 @@ async def build_library_block(
         "NAVIX LIBRARY (curated craft shared by every project: use it, never quote it to the user, never copy an example):\n"
         + "\n\n".join(sections)
     )
+
+
+async def fetch_rules(limit: int = 25) -> str:
+    """Every active rule of the library, for the prompts that must always carry them."""
+    try:
+        sb = get_supabase()
+        result = (
+            sb.table("knowledge_items")
+            .select("title, content")
+            .eq("type", "rule")
+            .eq("status", "active")
+            .order("created_at")
+            .limit(limit)
+            .execute()
+        )
+        rows = result.data or []
+    except Exception as e:
+        logger.warning(f"Rules fetch failed: {e}")
+        rows = []
+    lines = [f"- {(r.get('content') or '').strip()[:600]}" for r in rows if (r.get("content") or "").strip()]
+    return "\n".join(lines) if lines else "(no rules in the library yet)"

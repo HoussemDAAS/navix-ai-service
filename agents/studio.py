@@ -15,7 +15,8 @@ from typing import Any, AsyncIterator
 from openai import AsyncOpenAI
 
 from prompt_context import grounding
-from rag import build_library_block, get_supabase, retrieve_context
+from rag import build_library_block, fetch_rules, get_supabase, retrieve_context
+from agents.critic import edit_draft
 from schemas.studio import StudioChatRequest
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,23 @@ TOOLS: list[dict[str, Any]] = [
                     "idea_title": {"type": "string", "description": "the idea this draft develops"},
                     "format": {"type": "string", "description": "reel | carousel | image | story | tiktok | short"},
                     "language": {"type": "string", "description": "language the content is written in"},
-                    "caption_text": {"type": "string", "description": "the caption, ready to post"},
+                    "caption_text": {
+                        "type": "string",
+                        "description": "NEVER empty, also for video formats: the caption ready to post, in the content language: first line the hook, two to four short lines of value, one CTA, 3 to 5 hashtags",
+                    },
+                    "research": {
+                        "type": "object",
+                        "description": "REQUIRED for a sales piece (a product, an offer, e-commerce): settle it before writing and build the script on it",
+                        "properties": {
+                            "other_solutions": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "what the buyer uses today and why it fails, one string each: 'solution: cons'",
+                            },
+                            "awareness": {"type": "string", "description": "unaware | problem aware | solution aware | product aware"},
+                            "unique_mechanism": {"type": "string", "description": "the 2 to 4 features that explain why this product works where the others fail, one line"},
+                        },
+                    },
                     "video_script": {
                         "type": "string",
                         "description": "for video formats: the SPOKEN words, one line per shot separated by newlines, written in the content language, with the camera note in [brackets] at the end of the line; omit for non-video formats",
@@ -202,7 +219,11 @@ How you work:
 - A revision keeps what the user liked and changes only what they asked; pass revises_draft_id.
 - A video script is what the person SAYS, line by line, in the content language; the camera note goes in [brackets] at the end of the line. Never deliver a script made of English stage directions only.
 - Tunisian Derja is the Derja a Tunisian actually says (برشا، توا، باهي، كيفاش، شنوة، هاو، علاش، ما...ش, زادة، فيسع). Never Egyptian, Levantine, Gulf or standard-Arabic words. The French words Tunisians say stay in Latin letters inside the Arabic text (commande, lien, livraison, promo, lavage, importé, COD).
-- For a sales script (a product, an offer, e-commerce): before writing, settle the research header in your head: the other solutions the buyer already uses and their cons, the awareness stage, the product's unique mechanism in one line. Then build the script on a framework from the library (hook, pain, mechanism, product and proof, objection kill, CTA), make the proof something the camera can show, and fill 3 hooks from the hook templates with the brief's own words.
+- For a sales script (a product, an offer, e-commerce): fill the research field of write_draft first (the other solutions the buyer uses today and their cons, the awareness stage, the product's unique mechanism in one line) and build the script on it, following a framework from the library: hook, pain in everyday moments, why the current solutions fail, "هذاكا علاش" and the mechanism, a proof the camera can show, one objection answered, one CTA with the action, the reassurance (COD) and a believable reason for urgency. Fill 3 hooks from the hook templates with the brief's own words.
+- Never leave a placeholder in a draft: a product without a brand name is called by its generic Derja name (الحامل المغناطيسي, التابي, الكريم), the brand is called by its name.
+- The library examples are craft, not content: take their structure, rhythm and register, never a line. A sentence that fits another product (a car mat, an olive press) in your draft is a copy, and a copy is a failure.
+- A caption is a real Instagram caption in the content language: the first line is the hook, then two to four short lines that carry value on their own, one CTA, then 3 to 5 hashtags. Never a summary of the video.
+- Every draft goes through an editor pass before the user sees it; your prose must not promise wording the card may not keep, so describe what the draft does, not its exact words.
 {grounding}
 
 BRAND KIT:
@@ -245,7 +266,9 @@ def _format_hits(chunks: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-async def _run_tool(project_id: str, name: str, args: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+async def _run_tool(
+    project_id: str, name: str, args: dict[str, Any], ctx: dict[str, Any] | None = None
+) -> tuple[list[dict[str, Any]], str]:
     """Execute a tool. Returns (events to stream to the client, text result for the model)."""
     # Own captions are short and multilingual: cosine scores against a query sit around
     # 0.3-0.4, so the default 0.4 cut-off would hide the user's own voice.
@@ -323,9 +346,26 @@ async def _run_tool(project_id: str, name: str, args: dict[str, Any]) -> tuple[l
             script = re.sub(r",\s*(?=\d{1,2}\.\s)", "\n", script)
             script = re.sub(r",\s*(?=\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2})", "\n", script)
         draft["video_script"] = script
+        # Editor pass: dialect, framework and caption rules, before the card is shown
+        if ctx is not None:
+            draft = await edit_draft(
+                draft,
+                content_language=ctx.get("content_language"),
+                brand_kit=ctx.get("brand_kit"),
+                rules=ctx.get("rules") or "",
+                niche=ctx.get("niche"),
+            )
+        # Last resort: a card never ships without a caption
+        if not str(draft.get("caption_text") or "").strip():
+            first = str(draft.get("video_script") or "").split("\n")[0].split("[")[0].strip()
+            hooks = draft.get("hook_alternatives") or []
+            draft["caption_text"] = (first or (hooks[0] if hooks else "") or str(draft.get("idea_title") or "")).strip()
+        notes = draft.get("editor_changes") or []
+        editor_line = (" The editor pass adjusted: " + "; ".join(notes) + ".") if notes else ""
         return (
             [{"type": "draft", "draft": draft}],
-            "Draft shown to the user as a card. In one or two sentences say what you did and offer one concrete next step (a revision angle, a second format, or approval).",
+            "Draft shown to the user as a card." + editor_line
+            + " In one or two sentences say what the draft does and offer one concrete next step (a revision angle, a second format, or approval).",
         )
 
     return [], f"Unknown tool {name}"
@@ -426,6 +466,13 @@ async def stream_studio_turn(request: StudioChatRequest) -> AsyncIterator[str]:
         creator_memory=request.creator_memory or "Nothing yet — this is one of the first sessions.",
         library=library,
     )
+    # What the editor pass needs for every draft of this turn
+    ctx = {
+        "content_language": request.content_language or "same as my posts",
+        "brand_kit": request.brand_kit,
+        "rules": await fetch_rules(),
+        "niche": niche,
+    }
     if request.project:
         p = request.project
         system += (
@@ -524,7 +571,7 @@ async def stream_studio_turn(request: StudioChatRequest) -> AsyncIterator[str]:
                 except json.JSONDecodeError:
                     args = {}
                 try:
-                    events, result = await _run_tool(request.project_id, c["name"], args)
+                    events, result = await _run_tool(request.project_id, c["name"], args, ctx)
                 except Exception as exc:  # a failed tool must not kill the turn
                     logger.warning(f"Studio tool {c['name']} failed: {exc}")
                     events, result = [], f"Tool {c['name']} failed: {exc}"

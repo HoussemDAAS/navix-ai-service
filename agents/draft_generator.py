@@ -7,7 +7,10 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 
 from schemas.drafts import DraftsRequest, DraftsResponse, Draft
-from rag import build_library_block, retrieve_brand_voice
+import asyncio
+
+from rag import build_library_block, fetch_rules, retrieve_brand_voice
+from agents.critic import edit_draft
 from prompt_context import grounding
 
 logger = logging.getLogger(__name__)
@@ -119,6 +122,24 @@ async def parse_drafts(state: DraftState) -> DraftState:
 
     parsed = json.loads(raw)
     drafts = [Draft(**d) for d in parsed]
+
+    # Editor pass on every draft: dialect, framework and caption rules
+    request = state["request"]
+    rules = await fetch_rules()
+    kit = request.brand_kit.model_dump() if hasattr(request.brand_kit, "model_dump") else dict(request.brand_kit or {})
+    fixed = await asyncio.gather(
+        *(edit_draft(d.model_dump(), content_language="same as my posts", brand_kit=kit, rules=rules) for d in drafts)
+    )
+    drafts = [
+        Draft(
+            direction_title=d.direction_title,
+            caption_text=f.get("caption_text") or d.caption_text,
+            video_script=f.get("video_script", d.video_script),
+            hook_alternatives=f.get("hook_alternatives") or d.hook_alternatives,
+            cta_alternatives=f.get("cta_alternatives") or d.cta_alternatives,
+        )
+        for d, f in zip(drafts, fixed)
+    ]
     state["final_result"] = DraftsResponse(drafts=drafts)
     return state
 
